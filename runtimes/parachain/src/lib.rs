@@ -25,6 +25,7 @@
 #[cfg(feature = "std")]
 include!(concat!(env!("OUT_DIR"), "/wasm_binary.rs"));
 
+use cumulus_primitives::{relay_chain::Balance as RelayChainBalance, ParaId};
 use frame_support::weights::{
 	constants::{BlockExecutionWeight, ExtrinsicBaseWeight},
 	DispatchClass,
@@ -33,23 +34,34 @@ use frame_system::limits::{BlockLength, BlockWeights};
 use kilt_primitives::*;
 use orml_currencies::BasicCurrencyAdapter;
 use orml_traits::{arithmetic::Zero, parameter_type_with_key};
+use orml_xcm_support::{
+	CurrencyIdConverter, IsConcreteWithGeneralKey, MultiCurrencyAdapter, NativePalletAssetOr,
+};
+use polkadot_parachain::primitives::Sibling;
 use sp_api::impl_runtime_apis;
 use sp_core::OpaqueMetadata;
 use sp_runtime::{
 	create_runtime_str, generic, impl_opaque_keys,
-	traits::{BlakeTwo256, Block as BlockT, IdentityLookup, Verify},
+	traits::{BlakeTwo256, Block as BlockT, Convert, IdentityLookup, Verify},
 	transaction_validity::{TransactionSource, TransactionValidity},
 	ApplyExtrinsicResult,
 };
-use sp_std::prelude::*;
+use sp_std::{collections::btree_set::BTreeSet, prelude::*};
 #[cfg(feature = "std")]
 use sp_version::NativeVersion;
 use sp_version::RuntimeVersion;
+use xcm::v0::{Junction, MultiLocation, NetworkId};
+use xcm_builder::{
+	AccountId32Aliases, ChildParachainConvertsVia, LocationInverter, ParentIsDefault,
+	RelayChainAsNative, SiblingParachainAsNative, SiblingParachainConvertsVia,
+	SignedAccountId32AsNative, SovereignSignedViaLocation,
+};
+use xcm_executor::{Config, XcmExecutor};
 
 // A few exports that help ease life for downstream crates.
 pub use frame_support::{
 	construct_runtime, parameter_types,
-	traits::Randomness,
+	traits::{Randomness, Get},
 	weights::{constants::WEIGHT_PER_SECOND, IdentityFee, Weight},
 	StorageValue,
 };
@@ -324,6 +336,107 @@ impl orml_currencies::Config for Runtime {
 	type WeightInfo = ();
 }
 
+parameter_types! {
+	pub KiltNetwork: NetworkId = NetworkId::Named("kilt_parachain_rococo".into());
+	pub RelayChainOrigin: Origin = cumulus_pallet_xcm_handler::Origin::Relay.into();
+	pub Ancestry: MultiLocation = MultiLocation::X1(Junction::Parachain {
+		id: ParachainInfo::get().into(),
+	});
+	pub const RelayChainCurrencyId: CurrencyId = CurrencyId::DOT;
+}
+
+pub type LocationConverter = (
+	ParentIsDefault<AccountId>,
+	SiblingParachainConvertsVia<Sibling, AccountId>,
+	ChildParachainConvertsVia<ParaId, AccountId>,
+	AccountId32Aliases<KiltNetwork, AccountId>,
+);
+
+pub type LocalAssetTransactor = MultiCurrencyAdapter<
+	Currencies,
+	IsConcreteWithGeneralKey<CurrencyId, RelayToNative>,
+	LocationConverter,
+	AccountId,
+	CurrencyIdConverter<CurrencyId, RelayChainCurrencyId>,
+	CurrencyId,
+>;
+
+pub type LocalOriginConverter = (
+	SovereignSignedViaLocation<LocationConverter, Origin>,
+	RelayChainAsNative<RelayChainOrigin, Origin>,
+	SiblingParachainAsNative<cumulus_pallet_xcm_handler::Origin, Origin>,
+	SignedAccountId32AsNative<KiltNetwork, Origin>,
+);
+
+parameter_types! {
+	pub NativeOrmlTokens: BTreeSet<(Vec<u8>, MultiLocation)> = {
+		let mut t = BTreeSet::new();
+		//TODO: might need to add other assets based on orml-tokens
+		t.insert(("AUSD".into(), (Junction::Parent, Junction::Parachain { id: 666 }).into()));
+		t
+	};
+}
+
+pub struct XcmConfig;
+impl Config for XcmConfig {
+	type Call = Call;
+	type XcmSender = XcmHandler;
+	type AssetTransactor = LocalAssetTransactor;
+	type OriginConverter = LocalOriginConverter;
+	//TODO: might need to add other assets based on orml-tokens
+	type IsReserve = NativePalletAssetOr<NativeOrmlTokens>;
+	type IsTeleporter = ();
+	type LocationInverter = LocationInverter<Ancestry>;
+}
+
+impl cumulus_pallet_xcm_handler::Config for Runtime {
+	type Event = Event;
+	type XcmExecutor = XcmExecutor<XcmConfig>;
+	type UpwardMessageSender = ParachainUpgrade;
+	type HrmpMessageSender = ParachainUpgrade;
+}
+
+pub struct RelayToNative;
+impl Convert<RelayChainBalance, Balance> for RelayToNative {
+	fn convert(val: u128) -> Balance {
+		// native is 18
+		// relay is 12
+		val * 1_000_000
+	}
+}
+
+pub struct NativeToRelay;
+impl Convert<Balance, RelayChainBalance> for NativeToRelay {
+	fn convert(val: u128) -> Balance {
+		// native is 18
+		// relay is 12
+		val / 1_000_000
+	}
+}
+
+pub struct AccountId32Convert;
+impl Convert<AccountId, [u8; 32]> for AccountId32Convert {
+	fn convert(account_id: AccountId) -> [u8; 32] {
+		account_id.into()
+	}
+}
+
+parameter_types! {
+	pub const PolkadotNetworkId: NetworkId = NetworkId::Polkadot;
+}
+
+impl orml_xtokens::Config for Runtime {
+	type Event = Event;
+	type Balance = Balance;
+	type ToRelayChainBalance = NativeToRelay;
+	type AccountId32Convert = AccountId32Convert;
+	//TODO: change network id if kusama
+	type RelayChainNetworkId = PolkadotNetworkId;
+	type ParaId = ParachainInfo;
+	type AccountIdConverter = LocationConverter;
+	type XcmExecutor = XcmExecutor<XcmConfig>;
+}
+
 construct_runtime! {
 	pub enum Runtime where
 		Block = Block,
@@ -349,6 +462,8 @@ construct_runtime! {
 
 		Tokens: orml_tokens::{Module, Call, Storage, Event<T>},
 		Currencies: orml_currencies::{Module, Call, Storage, Event<T>},
+		XcmHandler: cumulus_pallet_xcm_handler::{Module, Event<T>, Origin},
+		XTokens: orml_xtokens::{Module, Call, Storage, Event<T>},
 	}
 }
 
