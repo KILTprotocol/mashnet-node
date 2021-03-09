@@ -309,18 +309,7 @@ impl orml_tokens::Config for Runtime {
 }
 
 parameter_types! {
-	pub const GetKiltTokenId: CurrencyId = CurrencyId::LAMI;
-	pub SyntheticCurrencyIds: Vec<CurrencyId> = vec![
-		CurrencyId::FEUR,
-		CurrencyId::FJPY,
-		CurrencyId::FAUD,
-		CurrencyId::FCAD,
-		CurrencyId::FCHF,
-		CurrencyId::FXAU,
-		CurrencyId::FOIL,
-		CurrencyId::FBTC,
-		CurrencyId::FETH,
-	];
+	pub const GetKiltTokenId: CurrencyId = CurrencyId::KILT;
 	pub const DefaultExtremeRatio: Permill = Permill::from_percent(1);
 	pub const DefaultLiquidationRatio: Permill = Permill::from_percent(5);
 	pub const DefaultCollateralRatio: Permill = Permill::from_percent(10);
@@ -337,7 +326,7 @@ impl orml_currencies::Config for Runtime {
 }
 
 parameter_types! {
-	pub KiltNetwork: NetworkId = NetworkId::Named("kilt_parachain_rococo".into());
+	pub KiltNetwork: NetworkId = NetworkId::Named("kilt".into());
 	pub RelayChainOrigin: Origin = cumulus_pallet_xcm_handler::Origin::Relay.into();
 	pub Ancestry: MultiLocation = MultiLocation::X1(Junction::Parachain {
 		id: ParachainInfo::get().into(),
@@ -373,6 +362,10 @@ parameter_types! {
 		let mut t = BTreeSet::new();
 		//TODO: might need to add other assets based on orml-tokens
 		t.insert(("AUSD".into(), (Junction::Parent, Junction::Parachain { id: 666 }).into()));
+		t.insert(("KILT".into(), (Junction::Parent, Junction::Parachain { id: 12623 }).into()));
+
+		// TODO: remove. Only for testing...
+		t.insert(("KILT-300".into(), (Junction::Parent, Junction::Parachain { id: 300 }).into()));
 		t
 	};
 }
